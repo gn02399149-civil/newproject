@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase 數據遷移工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Noto Sans TC', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            max-width: 800px;
+            width: 100%;
+        }
+        h1 {
+            color: #1b2b20;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 28px;
+        }
+        .step {
+            margin: 25px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-left: 5px solid #b8402a;
+            border-radius: 6px;
+        }
+        .step-title {
+            font-weight: bold;
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .step-content {
+            color: #666;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+        .warning {
+            border-left-color: #ffc107;
+            background: #fff8e1;
+        }
+        button {
+            background: #b8402a;
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 15px;
+        }
+        button:hover:not(:disabled) {
+            background: #8e301f;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(184,64,42,0.3);
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .log-area {
+            background: #1b2b20;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 15px 0;
+            line-height: 1.5;
+            border: 2px solid #333;
+        }
+        .log-entry {
+            margin: 4px 0;
+            word-break: break-all;
+        }
+        .log-success { color: #00ff00; }
+        .log-error { color: #ff4444; }
+        .log-warn { color: #ffff00; }
+        .log-info { color: #00ccff; }
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 15px 0;
+            border: 2px solid #ddd;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #b8402a, #d4562e);
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .status {
+            text-align: center;
+            margin: 15px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .success-banner {
+            display: none;
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🔧 Firebase 數據遷移工具</h1>
+    
+    <div class="step warning">
+        <div class="step-title">⚠️ 重要說明</div>
+        <div class="step-content">
+            <ul style="margin-left: 20px; margin-top: 10px;">
+                <li>✅ 此工具會保留所有原始數據，不會刪除任何東西</li>
+                <li>✅ 會在 monthlyArchive 中創建新的月份文件夾</li>
+                <li>✅ 當月數據（2026年8月）會保留在 records 中</li>
+                <li>⏱️ 處理 12000+ 筆需要 5-15 分鐘，不要關閉此窗口</li>
+                <li>💡 建議用桌面版 Chrome/Firefox</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="step">
+        <div class="step-title">📊 遷移狀態</div>
+        <div class="status" id="status">準備就緒</div>
+        <div class="progress-bar">
+            <div class="progress-fill" id="migrateProgress" style="width: 0%;">0%</div>
+        </div>
+        <button id="migrateBtn" onclick="executeNowMigration()">🚀 開始遷移</button>
+    </div>
+
+    <div class="step">
+        <div class="step-title">📋 遷移日誌</div>
+        <div class="log-area" id="logArea"></div>
+    </div>
+
+    <div class="success-banner" id="successBanner">
+        🎉 遷移完成！請檢查 Firebase Console 驗證
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js"></script>
+
+<script>
+const firebaseConfig = {
+    apiKey: "AIzaSyBfUzWukLZxeHJJE0t5D6g2FRGwVSGNTPU",
+    authDomain: "my-accounting-app-3a865.firebaseapp.com",
+    projectId: "my-accounting-app-3a865",
+    storageBucket: "my-accounting-app-3a865.firebasestorage.app",
+    messagingSenderId: "1016794217950",
+    appId: "1:1016794217950:web:4b6d6360d17ca1b7cc714f"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+function log(msg, type = 'info') {
+    const logArea = document.getElementById('logArea');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry log-' + type;
+    entry.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    logArea.appendChild(entry);
+    logArea.scrollTop = logArea.scrollHeight;
+}
+
+function updateProgress(current, total) {
+    const percent = Math.round((current / total) * 100);
+    const progressFill = document.getElementById('migrateProgress');
+    progressFill.style.width = percent + '%';
+    progressFill.textContent = percent + '%';
+    document.getElementById('status').textContent = '進度: ' + current + ' / ' + total;
+}
+
+async function executeNowMigration() {
+    const btn = document.getElementById('migrateBtn');
+    btn.disabled = true;
+    document.getElementById('successBanner').style.display = 'none';
+    
+    log('🚀 開始遷移數據...', 'info');
+    document.getElementById('status').textContent = '正在讀取數據...';
+    
+    try {
+        // 1. 讀取所有 records
+        log('📋 正在讀取所有記錄...', 'info');
+        const recordsSnap = await db.collection('records').get();
+        const allRecords = [];
+        
+        recordsSnap.forEach(docSnap => {
+            allRecords.push({
+                ...docSnap.data(),
+                id: docSnap.id
+            });
+        });
+        
+        log('✅ 讀取完成：共 ' + allRecords.length + ' 筆', 'success');
+        
+        // 2. 按月份分組
+        log('📦 正在按月份分類...', 'info');
+        const groupedByMonth = {};
+        const currentMonth = '2026-08';
+        let currentMonthRecords = [];
+        
+        allRecords.forEach(r => {
+            const dateStr = String(r.date || '').replace(/\//g, '-');
+            const monthKey = dateStr.substring(0, 7);
+            
+            if (monthKey === currentMonth) {
+                currentMonthRecords.push(r);
+            } else if (monthKey && monthKey !== 'unknown') {
+                if (!groupedByMonth[monthKey]) {
+                    groupedByMonth[monthKey] = [];
+                }
+                groupedByMonth[monthKey].push(r);
+            }
+        });
+        
+        const monthCount = Object.keys(groupedByMonth).length;
+        log('✅ 分類完成：' + monthCount + ' 個歷史月份，當月 ' + currentMonthRecords.length + ' 筆', 'success');
+        
+        // 3. 寫入 monthlyArchive
+        log('🔄 開始遷移到 monthlyArchive...', 'warn');
+        const archiveMonths = Object.keys(groupedByMonth).sort();
+        
+        for (let i = 0; i < archiveMonths.length; i++) {
+            const monthKey = archiveMonths[i];
+            const records = groupedByMonth[monthKey];
+            
+            // 批量寫入記錄
+            const batch = db.batch();
+            records.forEach(r => {
+                const docRef = db.collection('monthlyArchive').doc(monthKey)
+                    .collection('records').doc(String(r.id));
+                batch.set(docRef, r);
+            });
+            
+            // 寫入月份統計
+            let totalIncome = 0, totalExpense = 0;
+            records.forEach(r => {
+                if (r.type === '收入') totalIncome += r.amount || 0;
+                else if (r.type === '支出') totalExpense += r.amount || 0;
+            });
+            
+            const summaryRef = db.collection('monthlyArchive').doc(monthKey)
+                .collection('summary').doc('data');
+            batch.set(summaryRef, {
+                month: monthKey,
+                count: records.length,
+                totalIncome: totalIncome,
+                totalExpense: totalExpense,
+                archivedAt: new Date()
+            });
+            
+            await batch.commit();
+            updateProgress(i + 1, archiveMonths.length);
+            log('✅ ' + monthKey + ': ' + records.length + ' 筆已封存', 'success');
+        }
+        
+        // 4. 清空 records 並只保留當月
+        log('🔄 更新 records collection...', 'warn');
+        document.getElementById('status').textContent = '清空舊數據...';
+        
+        const allDocsSnap = await db.collection('records').get();
+        
+        if (allDocsSnap.size > 0) {
+            const deleteBatch = db.batch();
+            allDocsSnap.forEach(docSnap => {
+                deleteBatch.delete(docSnap.ref);
+            });
+            await deleteBatch.commit();
+            log('🗑️ 已清空 records collection (' + allDocsSnap.size + ' 筆)', 'warn');
+        }
+        
+        // 5. 寫入當月數據
+        if (currentMonthRecords.length > 0) {
+            log('📝 正在寫入當月 (' + currentMonth + ') 數據...', 'info');
+            const currentBatch = db.batch();
+            currentMonthRecords.forEach(r => {
+                const docRef = db.collection('records').doc(String(r.id));
+                currentBatch.set(docRef, r);
+            });
+            await currentBatch.commit();
+            log('✅ 當月 ' + currentMonthRecords.length + ' 筆已寫入', 'success');
+        }
+        
+        log('', 'info');
+        log('🎉 遷移完成！', 'success');
+        log('', 'info');
+        log('📋 後續步驟：', 'info');
+        log('  1. 打開 Firebase Console 檢查 monthlyArchive 結構', 'info');
+        log('  2. 確認 records 中只有當月數據', 'info');
+        log('  3. 刷新應用頁面測試', 'info');
+        
+        document.getElementById('status').textContent = '遷移完成！';
+        document.getElementById('successBanner').style.display = 'block';
+        
+    } catch (err) {
+        log('❌ 遷移失敗：' + err.message, 'error');
+        console.error(err);
+        document.getElementById('status').textContent = '遷移失敗';
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+</body>
+</html>
