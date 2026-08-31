@@ -137,7 +137,7 @@
 </head>
 <body>
 <div class="container">
-    <h1>🔧 Firebase 數據遷移工具 v2</h1>
+    <h1>🔧 Firebase 數據遷移工具 v3</h1>
     
     <div class="step warning">
         <div class="step-title">⚠️ 重要說明</div>
@@ -153,11 +153,11 @@
 
     <div class="step">
         <div class="step-title">📊 遷移狀態</div>
-        <div class="status" id="status">準備就緒</div>
+        <div class="status" id="status">正在初始化...</div>
         <div class="progress-bar">
             <div class="progress-fill" id="migrateProgress">0%</div>
         </div>
-        <button id="migrateBtn" onclick="executeNowMigration()">🚀 開始遷移</button>
+        <button id="migrateBtn" onclick="executeNowMigration()" disabled>🚀 開始遷移</button>
     </div>
 
     <div class="step">
@@ -174,6 +174,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js"></script>
 
 <script>
+let db = null;
+
 const firebaseConfig = {
     apiKey: "AIzaSyBfUzWukLZxeHJJE0t5D6g2FRGwVSGNTPU",
     authDomain: "my-accounting-app-3a865.firebaseapp.com",
@@ -182,9 +184,6 @@ const firebaseConfig = {
     messagingSenderId: "1016794217950",
     appId: "1:1016794217950:web:4b6d6360d17ca1b7cc714f"
 };
-
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
 
 function log(msg, type = 'info') {
     const logArea = document.getElementById('logArea');
@@ -203,8 +202,32 @@ function updateProgress(current, total) {
     document.getElementById('status').textContent = '進度: ' + current + ' / ' + total;
 }
 
-async function sleep(ms) {
+function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 初始化 Firebase
+function initFirebase() {
+    try {
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+        log('✅ Firebase 已初始化', 'success');
+        log('可以點擊「開始遷移」按鈕了', 'info');
+        document.getElementById('migrateBtn').disabled = false;
+        document.getElementById('status').textContent = '準備就緒';
+    } catch(err) {
+        log('❌ Firebase 初始化失敗: ' + err.message, 'error');
+    }
+}
+
+// 頁面加載時初始化
+window.addEventListener('load', initFirebase);
+
+// 確保即使 load 事件已觸發也能初始化
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initFirebase);
+} else {
+    initFirebase();
 }
 
 async function executeNowMigration() {
@@ -217,20 +240,27 @@ async function executeNowMigration() {
     document.getElementById('status').textContent = '正在讀取數據...';
     
     try {
+        if (!db) {
+            throw new Error('Firebase 未正確初始化');
+        }
+        
         // 1. 讀取所有 records
         log('📋 正在讀取所有記錄...', 'info');
         let allRecords = [];
         let hasMore = true;
         let lastDoc = null;
-        const pageSize = 1000;
+        const pageSize = 500;
+        let pageNum = 0;
         
         while (hasMore) {
-            let query = db.collection('records').orderBy('date').limit(pageSize);
+            pageNum++;
+            let query = db.collection('records');
+            
             if (lastDoc) {
                 query = query.startAfter(lastDoc);
             }
             
-            const snapshot = await query.get();
+            const snapshot = await query.limit(pageSize).get();
             
             if (snapshot.empty) {
                 hasMore = false;
@@ -245,11 +275,16 @@ async function executeNowMigration() {
             });
             
             lastDoc = snapshot.docs[snapshot.docs.length - 1];
-            log('✓ 已讀取 ' + allRecords.length + ' 筆...', 'info');
-            await sleep(500);
+            log('✓ 第 ' + pageNum + ' 頁已讀取 (' + allRecords.length + ' 筆總計)...', 'info');
+            await sleep(200);
         }
         
         log('✅ 讀取完成：共 ' + allRecords.length + ' 筆', 'success');
+        
+        if (allRecords.length === 0) {
+            log('⚠️ 沒有找到任何記錄', 'warn');
+            return;
+        }
         
         // 2. 按月份分組
         log('📦 正在按月份分類...', 'info');
@@ -322,9 +357,10 @@ async function executeNowMigration() {
                 updateProgress(i + 1, archiveMonths.length);
                 log('✅ ' + monthKey + ': ' + records.length + ' 筆已封存', 'success');
                 
-                await sleep(300);
+                await sleep(100);
             } catch (err) {
                 log('⚠️ ' + monthKey + ' 寫入出錯: ' + err.message, 'warn');
+                console.error(err);
             }
         }
         
@@ -332,23 +368,25 @@ async function executeNowMigration() {
         log('🔄 更新 records collection...', 'warn');
         document.getElementById('status').textContent = '清空舊數據...';
         
+        let batchNum = 0;
         let hasMoreDocs = true;
         while (hasMoreDocs) {
-            const snapshot = await db.collection('records').limit(1000).get();
+            const snapshot = await db.collection('records').limit(500).get();
             
             if (snapshot.empty) {
                 hasMoreDocs = false;
                 break;
             }
             
+            batchNum++;
             const deleteBatch = db.batch();
             snapshot.forEach(doc => {
                 deleteBatch.delete(doc.ref);
             });
             
             await deleteBatch.commit();
-            log('🗑️ 已清空 ' + snapshot.size + ' 筆', 'warn');
-            await sleep(300);
+            log('🗑️ 第 ' + batchNum + ' 批已清空 (' + snapshot.size + ' 筆)', 'warn');
+            await sleep(100);
         }
         
         log('✅ records collection 已清空', 'success');
@@ -367,8 +405,9 @@ async function executeNowMigration() {
                 });
                 
                 await batch.commit();
-                log('✓ 已寫入 ' + Math.min(i + 500, currentMonthRecords.length) + ' / ' + currentMonthRecords.length, 'info');
-                await sleep(300);
+                const written = Math.min(i + 500, currentMonthRecords.length);
+                log('✓ 已寫入 ' + written + ' / ' + currentMonthRecords.length, 'info');
+                await sleep(100);
             }
             
             log('✅ 當月 ' + currentMonthRecords.length + ' 筆已寫入', 'success');
@@ -387,8 +426,8 @@ async function executeNowMigration() {
         
     } catch (err) {
         log('❌ 遷移失敗：' + err.message, 'error');
-        console.error(err);
-        document.getElementById('status').textContent = '❌ 遷移失敗';
+        console.error('詳細錯誤:', err);
+        document.getElementById('status').textContent = '❌ 遷移失敗: ' + err.message;
     } finally {
         btn.disabled = false;
     }
