@@ -1291,6 +1291,108 @@ function renderCharts(start, end, expMap, incMap, assetLine) {
 
   fetchCloudData();
 })();
+<script>
+// ============ Firebase 數據遷移工具 ============
+window.startMigration = async function() {
+  console.log('🚀 開始遷移數據...');
+  try {
+    console.log('📋 正在讀取所有記錄...');
+    let allRecords = [];
+    let lastDoc = null;
+    
+    while (true) {
+      let query = db.collection('records').limit(500);
+      if (lastDoc) query = query.startAfter(lastDoc);
+      const snapshot = await query.get();
+      if (snapshot.empty) break;
+      snapshot.forEach(d => allRecords.push({...d.data(), id: d.id}));
+      lastDoc = snapshot.docs[snapshot.docs.length - 1];
+      console.log('✓ 已讀取 ' + allRecords.length + ' 筆');
+      await new Promise(r => setTimeout(r, 300));
+    }
+    
+    console.log('✅ 讀取完成：' + allRecords.length + ' 筆');
+    
+    const grouped = {}, current = [];
+    allRecords.forEach(r => {
+      const m = String(r.date||'').replace(/\//g,'-').substring(0,7);
+      if(m === '2026-08') current.push(r);
+      else if(m.length === 7) {
+        if(!grouped[m]) grouped[m] = [];
+        grouped[m].push(r);
+      }
+    });
+    
+    console.log('✅ 分類完成：' + Object.keys(grouped).length + ' 月，當月 ' + current.length + ' 筆');
+    
+    const months = Object.keys(grouped).sort();
+    for (let i = 0; i < months.length; i++) {
+      const m = months[i];
+      const batch = db.batch();
+      grouped[m].forEach(r => {
+        batch.set(db.collection('monthlyArchive').doc(m).collection('records').doc(String(r.id)), r);
+      });
+      let inc = 0, exp = 0;
+      grouped[m].forEach(r => {
+        if(r.type==='收入') inc += r.amount||0;
+        else if(r.type==='支出') exp += r.amount||0;
+      });
+      batch.set(db.collection('monthlyArchive').doc(m).collection('summary').doc('data'), {
+        month:m, count:grouped[m].length, totalIncome:inc, totalExpense:exp, archivedAt: new Date()
+      });
+      await batch.commit();
+      console.log('✅ ' + m + ': ' + grouped[m].length + ' 筆已封存');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    
+    console.log('🔄 清空 records collection...');
+    let batchNum = 0;
+    while (true) {
+      const snap = await db.collection('records').limit(500).get();
+      if (snap.empty) break;
+      batchNum++;
+      const batch = db.batch();
+      snap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      console.log('🗑️ 第 ' + batchNum + ' 批已清空 (' + snap.size + ' 筆)');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    
+    if (current.length > 0) {
+      console.log('📝 正在寫入當月 ' + current.length + ' 筆...');
+      for (let i = 0; i < current.length; i += 500) {
+        const batch = db.batch();
+        current.slice(i, i + 500).forEach(r => {
+          batch.set(db.collection('records').doc(String(r.id)), r);
+        });
+        await batch.commit();
+        const written = Math.min(i + 500, current.length);
+        console.log('✓ 已寫入 ' + written + ' / ' + current.length);
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    
+    console.log('');
+    console.log('🎉 遷移完成！');
+    console.log('📋 後續檢查清單：');
+    console.log('  1. 打開 Firebase Console 檢查 monthlyArchive 結構');
+    console.log('  2. 確認 records 中只有當月數據');
+    console.log('  3. 刷新頁面測試應用功能');
+    
+  } catch(e) {
+    console.error('❌ 遷移失敗:', e.message);
+    console.error(e);
+  }
+};
+
+// 按快捷鍵啟動遷移：Ctrl+Shift+M
+document.addEventListener('keydown', function(e) {
+  if(e.ctrlKey && e.shiftKey && e.key === 'M') {
+    console.log('按下 Ctrl+Shift+M，開始遷移...');
+    startMigration();
+  }
+});
+</script>   
 </script>
 </body>
 </html>
